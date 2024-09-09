@@ -1,0 +1,49 @@
+services:
+  ollama:
+    container_name: ollama_v2
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - "./ollamadata:/root/.ollama"   # Persist data and models
+    ports:
+      - "11434:11434"                  # Expose the Ollama service on port 11434
+    healthcheck:
+      test: ["CMD", "ollama", "list"]  # Check if Ollama is responding
+      interval: 10s                    # Run the health check every 10 seconds
+      timeout: 30s                     # Timeout for the health check is 30 seconds
+      retries: 5                       # Retry 5 times before marking it as unhealthy
+      start_period: 10s                # Wait 10 seconds before starting health checks
+    networks:
+      - ollama_network
+
+  ollama-models-pull:
+    container_name: ollama-models-pull
+    image: curlimages/curl:latest       # Use curl to send HTTP requests
+    depends_on:
+      ollama:
+        condition: service_healthy      # Wait for Ollama to be healthy
+    command: >
+      curl -X POST host.docker.internal:11434/api/pull -d '{"name":"mistral:latest"}'
+      curl -X POST host.docker.internal:11434/api/pull -d '{"name":"nomic-embed-text"}'
+    networks:
+      - ollama_network
+
+  chatbot:
+    container_name: chatbot_v2
+    build:
+      context: ./    # The directory where Dockerfile and code are located
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - API_URL=host.docker.internal:11434     # Chatbot will access the Ollama API
+    ports:
+      - "8501:8501"                   # Expose chatbot on port 8080 (or any other port)
+    depends_on:
+      ollama-models-pull:
+        condition: service_completed_successfully  # Wait for model pull to complete
+    networks:
+      - ollama_network
+
+networks:
+  ollama_network:
+    driver: bridge
