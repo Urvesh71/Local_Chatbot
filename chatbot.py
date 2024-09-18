@@ -1,8 +1,9 @@
 import os
 import streamlit as st
+import shutil
 from langchain.chains import RetrievalQA
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from langchain.callbacks.manager import CallbackManager
+from langchain.callbacks.manager import CallbackManager, Callbacks
 from langchain_community.llms import Ollama
 from langchain_community.embeddings.ollama import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
@@ -11,11 +12,12 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory
 import time
+from langdetect import detect
 
 # Define models as constants for easy configuration
 EMBEDDING_MODEL = "nomic-embed-text:latest"
-LLM_MODEL = "mistral:latest"
-BASE_URL = os.getenv("BASE_URL", "http://host.docker.internal:11434")
+LLM_MODEL = "llama3:8b-instruct-q6_K"
+BASE_URL = os.getenv("BASE_URL", "http://ollama:11434 ")
 
 class PDFChatbot:
     def __init__(self):
@@ -31,7 +33,16 @@ class PDFChatbot:
 
     def setup_session_state(self):
         if 'template' not in st.session_state:
-            st.session_state.template = """You are a knowledgeable chatbot, here to help with questions of the user. Your tone should be professional and informative.
+            st.session_state.template = """You are a highly knowledgeable, professional, and multilingual chatbot. Your role is to assist users with information from uploaded PDF documents or general knowledge based on their questions.
+
+            - You must always respond in the same language as the user's input, unless explicitly asked otherwise.
+            - If the user asks a question that relates to the content of the uploaded document, use the relevant context from the document to provide a detailed and informative answer.
+            - If the document doesn't contain relevant information, you should clarify that and attempt to provide a general answer if possible, using external knowledge.
+            - Maintain a professional tone, and explain your responses clearly, with examples if necessary.
+            - If the user asks follow-up questions, incorporate relevant context from previous parts of the conversation (history) and try to build upon your earlier responses.
+            - For multilingual conversations, always adapt your responses based on the language of the user's input.
+            - If the user's question is unclear, politely ask for clarification.
+            - If no document has been uploaded, politely inform the user and try to answer based on general knowledge.
 
             Context: {context}
             History: {history}
@@ -41,7 +52,7 @@ class PDFChatbot:
 
         if 'prompt' not in st.session_state:
             st.session_state.prompt = PromptTemplate(
-                input_variables=["history", "context", "question"],
+                input_variables=["history", "context", "question", "language"],
                 template=st.session_state.template,
             )
 
@@ -53,37 +64,41 @@ class PDFChatbot:
             )
 
         if 'vectorstore' not in st.session_state:
-            st.session_state.vectorstore = Chroma(persist_directory='vector_database',
-                                                  embedding_function=OllamaEmbeddings(base_url=BASE_URL,
-                                                                                      model=EMBEDDING_MODEL)
-                                                  )
+            st.session_state.vectorstore = None
 
         if 'llm' not in st.session_state:
             st.session_state.llm = Ollama(base_url=BASE_URL,
                                           model=LLM_MODEL,
                                           verbose=True,
-                                          callback_manager=CallbackManager(
+                                          callbacks=CallbackManager(
                                               [StreamingStdOutCallbackHandler()]),
                                           )
 
         if 'chat_history' not in st.session_state:
             st.session_state.chat_history = []
 
+        if 'language' not in st.session_state:
+            st.session_state.language = 'en'  # Default language is English
+
     def display_title(self):
         st.title("PDF Chatbot")
 
     def clear_vectorstore(self):
-        if 'vectorstore' in st.session_state:
-            del st.session_state['vectorstore']
+        # Clear the vector database directory
+        if os.path.exists('vector_database'):
+            shutil.rmtree('vector_database')
+            os.mkdir('vector_database')
+        # Clear the session state variables
+        st.session_state.vectorstore = None
         if 'retriever' in st.session_state:
             del st.session_state['retriever']
         if 'qa_chain' in st.session_state:
             del st.session_state['qa_chain']
-        if 'chat_history' in st.session_state:
-            st.session_state.chat_history = []
+        st.session_state.chat_history = []
 
     def handle_upload(self, uploaded_file):
         if uploaded_file is not None:
+            # Only process the file if it's different from the current one
             if 'current_pdf' not in st.session_state or st.session_state.current_pdf != uploaded_file.name:
                 self.clear_vectorstore()
                 st.session_state.current_pdf = uploaded_file.name
@@ -93,7 +108,8 @@ class PDFChatbot:
                 start_time = time.time()
 
                 bytes_data = uploaded_file.read()
-                with open("files/" + uploaded_file.name + ".pdf", "wb") as f:
+                file_path = f"files/{uploaded_file.name}.pdf"
+                with open(file_path, "wb") as f:
                     f.write(bytes_data)
 
                 upload_time = time.time() - start_time
@@ -103,7 +119,7 @@ class PDFChatbot:
 
                 start_time = time.time()
 
-                loader = PyPDFLoader("files/" + uploaded_file.name + ".pdf")
+                loader = PyPDFLoader(file_path)
                 data = loader.load()
 
                 text_splitter = RecursiveCharacterTextSplitter(
@@ -115,7 +131,8 @@ class PDFChatbot:
 
                 st.session_state.vectorstore = Chroma.from_documents(
                     documents=all_splits,
-                    embedding=OllamaEmbeddings(base_url=BASE_URL, model=EMBEDDING_MODEL)
+                    embedding=OllamaEmbeddings(base_url=BASE_URL, model=EMBEDDING_MODEL),
+                    persist_directory='vector_database'
                 )
                 st.session_state.vectorstore.persist()
 
@@ -145,12 +162,32 @@ class PDFChatbot:
         if user_input:
             user_message = {"role": "user", "message": user_input}
             st.session_state.chat_history.append(user_message)
+
+            # Detect the language of the user input
+            input_language = detect(user_input)
+            st.session_state.language = input_language  # Store the detected language
+
+            # Retrieve relevant context from the uploaded PDF
+            context = ""
+            if 'retriever' in st.session_state:
+                retrieved_docs = st.session_state.retriever.get_relevant_documents(user_input)
+                context = " ".join([doc.page_content for doc in retrieved_docs])
+
             with st.chat_message("user"):
                 st.markdown(user_input)
+
             with st.chat_message("assistant"):
                 with st.spinner("Assistant is typing..."):
                     start_time = time.time()
-                    response = st.session_state.qa_chain(user_input)
+
+                    # Pass the language, context, and user question to the QA chain
+                    response = st.session_state.qa_chain({
+                        "query": user_input,
+                        "context": context,
+                        "history": st.session_state.memory,
+                        "language": st.session_state.language
+                    })
+
                     response_time = time.time() - start_time
 
                 message_placeholder = st.empty()
