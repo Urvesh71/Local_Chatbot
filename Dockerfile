@@ -37,13 +37,14 @@ RUN pip install langchain_core==0.2.9
 RUN pip install langchain_community==0.2.5
 RUN pip install PyPDF2
 RUN pip install pypdf==4.2.0
+RUN pip install langdetect==1.0.9
 
 # Expose the ports
 EXPOSE 8501
 
 # Set environment variables
 # ENV BASE_URL=http://ollama:11434
-ENV BASE_URL=http://host.docker.internal:11434
+ENV BASE_URL=http://ollama:11434 
 
 # Run the application
 CMD ["streamlit", "run", "chatbot.py", "--server.port=8501", "--server.address=0.0.0.0"]
