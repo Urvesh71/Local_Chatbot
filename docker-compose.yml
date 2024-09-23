@@ -5,30 +5,34 @@ services:
     restart: unless-stopped
     volumes:
       - "./ollamadata:/root/.ollama"
-      - "./start.sh:/start.sh"  # Mount the script into the container
+      - "./ollama-entrypoint.sh:/ollama-entrypoint.sh"
     ports:
       - "11434:11434"
-    entrypoint: /start.sh
-    privileged: true  # Enable privileged mode for the container
-    # networks:
-    #   - net
+    entrypoint: /ollama-entrypoint.sh
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
 
   chatbot:
     container_name: chatbot_v5
     build:
-      context: ./    # The directory where Dockerfile and code are located
+      context: ./ # The directory where Dockerfile and code are located
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      - BASE_URL=http://ollama:11434     # Chatbot will access the Ollama API
+      - BASE_URL=http://ollama:11434
     ports:
-      - "8501:8501"                      
+      - "8501:8501"
     depends_on:
       - ollama
-    privileged: true  # Enable privileged mode for the container
-    # networks:
-    #   - net
-
-# networks:
-#   net:
-#     driver: bridge
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
