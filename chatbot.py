@@ -3,7 +3,7 @@ import streamlit as st
 import shutil
 from langchain.chains import RetrievalQA
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from langchain.callbacks.manager import CallbackManager, Callbacks
+from langchain.callbacks.manager import CallbackManager
 from langchain_community.llms import Ollama
 from langchain_community.embeddings.ollama import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
@@ -13,11 +13,12 @@ from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory
 import time
 from langdetect import detect
+import torch  # Import PyTorch
 
 # Define models as constants for easy configuration
 EMBEDDING_MODEL = "nomic-embed-text:latest"
 LLM_MODEL = "llama3:8b-instruct-q6_K"
-BASE_URL = os.getenv("BASE_URL", "http://ollama:11434 ")
+BASE_URL = os.getenv("BASE_URL", "http://ollama:11434")
 
 class PDFChatbot:
     def __init__(self):
@@ -65,6 +66,14 @@ class PDFChatbot:
 
         if 'vectorstore' not in st.session_state:
             st.session_state.vectorstore = None
+        
+        # Check GPU availability
+        if 'gpu_available' not in st.session_state:
+            st.session_state.gpu_available = torch.cuda.is_available()
+            if st.session_state.gpu_available:
+                st.success("GPU is available and will be used for computations.")
+            else:
+                st.warning("GPU is not available. Computations will run on CPU.")
 
         if 'llm' not in st.session_state:
             st.session_state.llm = Ollama(base_url=BASE_URL,
