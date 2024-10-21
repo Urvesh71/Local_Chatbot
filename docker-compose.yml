@@ -1,38 +1,74 @@
 services:
-  ollama:
-    container_name: ollama_v5
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    volumes:
-      - "./ollamadata:/root/.ollama"
-      - "./ollama-entrypoint.sh:/ollama-entrypoint.sh"
-    ports:
-      - "11434:11434"
-    entrypoint: /ollama-entrypoint.sh
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
 
-  chatbot:
-    container_name: chatbot_v5
-    build:
-      context: ./ # The directory where Dockerfile and code are located
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      - BASE_URL=http://ollama:11434
+  ollama:
+    image: ollama/ollama:latest
     ports:
-      - "8501:8501"
+     - 11434:11434
+    healthcheck:
+      test: ollama --version || exit 1
+    command: serve
+    volumes:
+      - ollama:/root/.ollama
+      - ./start_ollama.sh:/start_ollama.sh
+    restart: always
+    entrypoint: [ "/usr/bin/bash", "/start_ollama.sh" ]
+    networks:
+      - web
+
+  webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - 3000:8080
+
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      ENABLE_RAG_WEB_SEARCH: True
+      RAG_WEB_SEARCH_ENGINE: "searxng"
+      RAG_WEB_SEARCH_RESULT_COUNT: 4
+      RAG_WEB_SEARCH_CONCURRENT_REQUESTS: 12
+      SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>"
+      # OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_BASE_URL: "http://ollama:11434/v1"
+      # SEARXNG_QUERY_URL: http://searxng.local/search?q=<query>
+      # PIPELINE_BASE_URL: "http://pipelines:9099"
+
+    volumes:
+      - open-webui:/app/backend/data
     depends_on:
-      - ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
+     - searxng
+     - ollama
+    #  - pipelines  
+    restart: always
+    networks:
+      - web
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - '8080:8080'
+    networks:
+      - web
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml
+
+    restart: always
+
+  # pipelines:
+  #   image: ghcr.io/open-webui/pipelines:main
+  #   ports:
+  #     - 9099:9099
+  #   volumes:
+  #     - ./pipelines:/app/pipelines
+  #   restart: always
+  #   networks:
+  #     - web
+  
+
+volumes:
+  ollama: {}
+  open-webui: {}
+  searxng: {}
+  # pipelines: {}
+
+networks:
+  web:
